@@ -43,3 +43,6 @@ next-env.d.ts
 
 # scratch space for temp files (mermaid renders, probes, throwaway scripts)
 .scratch/
+
+# playwright-mcp session artifacts (snapshots, console logs)
+.playwright-mcp/

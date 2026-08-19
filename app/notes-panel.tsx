@@ -1,17 +1,29 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Markdown } from './markdown';
 
-// ponytail: edits live in component state for the session — no persistence, no API
-// route, no draft history, per the project decisions. Regenerating or reloading
-// throws them away. Ceiling: the edited text is what milestone 6 must POST to ODC,
-// so when that lands the approved text has to be lifted into a form field the
-// deploy action reads.
-export function NotesPanel({ title, body }: { title: string; body: string }) {
+// ponytail: edits live in component state, mirrored to sessionStorage so the
+// approved text survives the navigation to the deploy step — which is the only
+// reason it's stored at all. Still no server persistence and no draft history: one
+// key per persona per release, overwritten on every keystroke, gone with the tab.
+export function NotesPanel({
+  title,
+  body,
+  storageKey,
+}: {
+  title: string;
+  body: string;
+  /** Where the deploy step reads this text from. `jr:<release>:technical|business`. */
+  storageKey: string;
+}) {
   const [text, setText] = useState(body);
   const [editing, setEditing] = useState(false);
   const edited = text !== body;
+
+  useEffect(() => {
+    sessionStorage.setItem(storageKey, text);
+  }, [storageKey, text]);
 
   return (
     <section className="rounded border border-black/15 p-4 dark:border-white/15">

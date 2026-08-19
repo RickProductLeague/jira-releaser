@@ -6,6 +6,8 @@ import {
   jqlString,
   parseIssueApps,
   releaseApps,
+  toPlainText,
+
   refKey,
   type Issue,
 } from './jira';
@@ -121,3 +123,33 @@ assert.deepEqual(
 );
 
 console.log('app parsing ok');
+
+// --- toPlainText: the agent writes markdown, Jira gets prose ---
+assert.equal(toPlainText('## Business Release Notes'), 'Business Release Notes');
+assert.equal(toPlainText('### What We Fixed'), 'What We Fixed');
+assert.equal(toPlainText('# Top'), 'Top');
+// Emphasis markers go, the words stay. No stray asterisk left behind.
+assert.equal(toPlainText('**Track Restaurants You Love**'), 'Track Restaurants You Love');
+assert.equal(toPlainText('a **b** c **d** e'), 'a b c d e');
+assert.equal(toPlainText('***all three***'), 'all three');
+assert.equal(toPlainText('_ital_ and __bold__'), '_ital_ and bold');
+assert.equal(toPlainText('use `npm run dev`'), 'use npm run dev');
+// Bullets keep their marker — a list with no markers stops reading as a list — but
+// normalise to "-" so nothing survives that wiki markup would read as bold.
+assert.equal(toPlainText('- **Search** by name'), '- Search by name');
+assert.equal(toPlainText('* star bullet'), '- star bullet');
+// Indentation of a nested bullet survives — mid-document, which is the only place
+// it can occur. The document-level trim owns the first and last line.
+assert.equal(toPlainText('- top\n  - nested'), '- top\n  - nested');
+// Numbered lists are already plain text.
+assert.equal(toPlainText('1. first'), '1. first');
+// Rules carry no words, so they vanish and don't leave a blank-line run.
+assert.equal(toPlainText('a\n\n---\n\nb'), 'a\n\nb');
+// A heading marker only counts at the start of a line.
+assert.equal(toPlainText('not # a heading'), 'not # a heading');
+// Links keep the URL — dropping it would lose information.
+assert.equal(toPlainText('see [the docs](https://x.dev)'), 'see the docs (https://x.dev)');
+// Multi-line stays line-oriented, and the whole thing is trimmed.
+assert.equal(toPlainText('## H\n- one\n- two\n'), 'H\n- one\n- two');
+
+console.log('plain text ok');
