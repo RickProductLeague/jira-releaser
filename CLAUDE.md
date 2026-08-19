@@ -109,6 +109,27 @@ Tests are plain `node:assert/strict` scripts run with `tsx`. No Jest, no Vitest,
 config, no fixtures. Test the logic with real edge cases; don't mock `fetch` to prove
 that `fetch` was called.
 
+## Branching and deploys
+
+**Work directly on `main` for now.** It's a POC — a branch per change buys review
+process we don't want yet. Optionally, for a change worth a second look, cut a branch
+and open a PR into `main`; milestone 1 shipped that way (PR #1).
+
+The Vercel project is git-linked, so this has teeth:
+
+- push to `main` → **production** deploy, live immediately
+- push any other branch, or open a PR → preview deploy on its own URL
+
+So a push to `main` is a release. That's the intended POC tradeoff, not an accident —
+but it means "commit to main" and "deploy to production" are the same action. Combined
+with the rule below, the human decides when that happens.
+
+Vercel Authentication is on, so deployment URLs need a Vercel login. Don't disable it:
+the app has no auth of its own and serves Jira data through the server's API token.
+
+Env vars are **not** settable over MCP — `JIRA_*` changes are dashboard-only, and they
+only take effect on the *next* deploy, never on existing ones.
+
 ## Housekeeping
 
 - Temp files — probes, diagram renders, throwaway scripts — go in **`.scratch/`**
