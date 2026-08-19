@@ -9,6 +9,22 @@ comment on each ticket.
 Next.js 16 (App Router) · React 19 · Tailwind v4 · TypeScript. No database; Jira is the
 only data source.
 
+## Status
+
+Hackathon POC. **Milestones 1, 2 and 4 are built**, and 3 partly: a three-step wizard
+— pick a release, review its Jira issues and the derived deploy set, then generate
+technical + customer release notes from the ODC agent and edit them inline. ODC reads
+(stages, assets) are verified against the live tenant.
+
+Nothing is released automatically yet. The step that writes notes back to ODC and
+POSTs the deployment (6) is not started, so edits live in the browser for the session
+and go nowhere. See `pm/milestones.md` for the table and `pm/architecture.md` for the
+design.
+
+So "automated release" currently describes the intent, not the behaviour. The one thing
+that *is* automated end to end is this repo's own deployment — see
+[Deploy workflow](#deploy-workflow).
+
 ## Environment variables
 
 All three are required. Without them the page renders an error box instead of the

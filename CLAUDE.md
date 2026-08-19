@@ -24,6 +24,8 @@ CI/CD APIs.
 ```bash
 npm run dev                    # http://localhost:3000
 npx tsx lib/jira.test.ts       # expects "jqlString ok" / "app parsing ok"
+npx tsx lib/notes.test.ts      # expects "notes split ok"
+npx tsx app/markdown.test.tsx  # expects "markdown ok"
 npx tsc --noEmit
 ```
 
@@ -35,9 +37,10 @@ Env vars live in `.env.local` (see `.env.example`): `JIRA_BASE_URL`, `JIRA_EMAIL
 The governing instinct is **stop at the first solution that works**. Every rule below
 is a thing we decided not to build. Don't quietly reintroduce them.
 
-- **No database.** State derives from Jira per request. When approval state must
-  survive a reload, it becomes a JSON file per release under `.data/` — not Postgres,
-  not Prisma.
+- **No persistence at all.** Not Postgres, not Prisma, not a JSON file under
+  `.data/`. Issues come from Jira per request, notes from the ODC agent per request,
+  and approval is client state in the review page: generate → edit → approve →
+  deploy, all in one session. A reload starts over, and that's fine for the demo.
 - **No adapter interfaces.** One implementation is not an abstraction. Demo safety for
   ODC comes from an `ODC_MOCK=1` early return inside each function, not an
   `OdcAdapter` / `MockAdapter` pair.

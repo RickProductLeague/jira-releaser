@@ -5,56 +5,89 @@ today, not the finished plan. For what's coming, see [milestones.md](./milestone
 
 ## The whole system at a glance
 
-Solid boxes and arrows exist in the repo today. Dashed ones do not.
+Solid boxes and arrows exist in the repo today. Dashed ones do not. The three
+external systems are all reachable and verified — it's the wiring between them and
+the dashboard that isn't built.
 
 ```mermaid
 flowchart TB
     Jira[("Jira Cloud<br/>project HAC<br/>fixVersion = one release")]
+    OdcApi[("OutSystems ODC public REST APIs<br/>productleague tenant<br/>OAuth2 client credentials")]
+    Agent{{"Release Notes Agent<br/>ODC app on personal-nrwxjjed-dev<br/>POST /rest/ReleaseNotes/V1/ReleaseNotes"}}
 
     subgraph server["Next.js on the server"]
         direction TB
         Client["<b>lib/jira.ts</b><br/>REST v2 client<br/>versions, issues, paging"]
         Parse["<b>app-version parser</b><br/>reads ODC apps out of<br/>ticket comments"]
+        Odc["<b>lib/odc.ts</b><br/>stages, listApps<br/>token cache, ODC_MOCK"]
         Dash["<b>app/page.tsx</b><br/>dashboard: issue table,<br/>deploy set, warnings"]
         Client --> Parse --> Dash
+        Odc --> Dash
     end
 
-    Notes["dual-persona note generation<br/>technical + customer-facing"]
-    Review["review, edit, approve"]
-    Store[("approved release<br/>JSON on disk")]
-    ODC["ODC CI/CD APIs<br/>write notes to revision,<br/>deploy to next stage"]
-    Dispatch["dispatch changelog<br/>Teams, mark version released"]
+    Review["review, edit, approve<br/>technical + customer notes<br/>side by side"]
+    WriteNotes["write technical notes to<br/>each asset revision"]
+    Changelog["write customer changelog to<br/>the Jira fixVersion description"]
+    Deploy["deploy each asset Dev to Prod<br/>Release build only, poll to Finished"]
+    MarkReleased["mark the Jira fixVersion<br/>as released"]
 
     Jira ==> Client
-    Dash -.-> Notes
-    Notes -.-> Review
-    Review -.-> Store
-    Review -.-> ODC
-    ODC -.-> Dispatch
+    OdcApi ==> Odc
+
+    Dash -. "issues + apps" .-> Agent
+    Agent -. "technical + friendly notes" .-> Review
+    Review -. "approve" .-> WriteNotes
+    Review -. "approve" .-> Changelog
+    WriteNotes -.-> Deploy
+    Changelog -. "PUT /version/id" .-> Jira
+    Deploy -.-> OdcApi
+    Deploy -. "on success" .-> MarkReleased
+    MarkReleased -. "released = true" .-> Jira
 
     Browser(["Browser<br/>plain GET form, no client JS"])
     Dash ==> Browser
 
     classDef built fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
-    classDef todo fill:transparent,stroke:#94a3b8,stroke-width:1px,stroke-dasharray:5 4,color:#64748b
+    classDef todo fill:#f1f5f9,stroke:#94a3b8,stroke-width:1px,stroke-dasharray:5 4,color:#475569
     classDef ext fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#1e1b4b
 
-    class Client,Parse,Dash,Browser built
-    class Notes,Review,Store,ODC,Dispatch todo
-    class Jira ext
+    style server fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#334155
+
+    class Client,Parse,Odc,Dash,Browser built
+    class Review,WriteNotes,Changelog,Deploy,MarkReleased todo
+    class Jira,OdcApi,Agent ext
 ```
 
-The built portion is milestone 1. Everything dashed is milestones 2–7, tracked in
-[milestones.md](./milestones.md).
+The built portion is milestones 1 and 4. Everything dashed is 2, 3, 6 and 7, tracked
+in [milestones.md](./milestones.md).
+
+Note that **note generation is not in this repo**. It's an OutSystems agent app on a
+different ODC tenant, exposed as one unauthenticated REST endpoint; the dashboard
+POSTs tickets to it and renders what comes back. Its contract lives at
+`https://personal-nrwxjjed-dev.outsystems.app/Releasenotesagent/rest/ReleaseNotes/swagger.json`.
+That satisfies the brief's "agent to communicate with Jira" without an Anthropic key
+in this codebase.
+
+Approval fans out to four writes, not one: technical notes onto each ODC asset
+revision, the customer changelog onto the Jira fixVersion description, the deploy
+itself, and — only once the deploy reports `Finished` — marking the fixVersion
+released in Jira. Marking released before a successful deploy would claim a release
+that didn't happen.
+
+Note also that the two ODC arrows point at the *same* tenant for reads and deploys
+(`productleague`), but the agent lives on a *different* one (`personal-nrwxjjed-dev`),
+so it never appears in `listApps()`.
 
 ## What the app does
 
-Picks a release out of Jira, gathers the tickets in it, turns them into two kinds of
-release notes (technical and customer-facing), lets a human approve them, and deploys
-the release to the next OutSystems ODC stage.
+Picks a release out of Jira, gathers the tickets in it, sends them to an OutSystems
+agent that writes two kinds of release notes (technical and customer-facing), lets a
+human review and approve them, then writes the technical notes onto each ODC asset
+revision, the customer changelog onto the Jira fixVersion, and deploys the assets to
+the next OutSystems ODC stage.
 
-Only the first part is built. Everything from "turns them into notes" onward is not
-yet written.
+Built: the Jira read, the app parsing, and the ODC reads. Not built: everything from
+"sends them to an agent" onward.
 
 ## Stack
 
@@ -63,7 +96,7 @@ yet written.
 | Framework | Next.js 16, App Router | React 19, TypeScript |
 | Styling | Tailwind CSS 4 | Via `@tailwindcss/postcss`, no config file |
 | Data source | Jira Cloud REST API v2 | Basic auth, API token |
-| Persistence | None | See "No database" below |
+| Persistence | None, by decision | See "No persistence at all" below |
 | Deploy target | Vercel | Not yet deployed |
 
 No state library, no data-fetching library, no ORM, no component library, no test
@@ -204,10 +237,22 @@ them needs touching. A configurator UI for the mapping is explicitly deferred.
 
 These are choices, not accidents. Each one is a thing we decided *not* to build.
 
-**No database.** Release state is not persisted at all yet; the page derives
-everything from Jira on each request. When approval state needs to survive a reload,
-it becomes a JSON file per release, not Postgres. A single-user demo does not need a
-schema, migrations, or an ORM.
+**No persistence at all.** *Agreed with Rick.* Not Postgres, not an ORM, and not a
+JSON file on disk either. Issues come from Jira per request and notes from the ODC
+agent per request; approval is client state in the review page. One session runs
+generate → edit → approve → deploy, and a reload starts over.
+
+Two reasons this is the cheapest correct answer rather than a corner cut. First,
+there is very little to persist: which tickets are in a release is Jira's answer,
+notes are regenerable, and deployment history belongs to ODC — the only genuinely
+new state is one approval flag plus whatever text a human edited. Second, a JSON
+file would not have worked in production anyway: the Vercel filesystem is ephemeral
+and read-only outside `/tmp`, so `.data/` persists locally and silently does not
+once deployed. Persistence is a lie or a KV store, and neither is worth it here.
+
+Revisit if the demo needs approval to survive a reload, or if two people approve
+concurrently. The upgrade is Vercel KV, a handful of lines, and nothing above it
+changes.
 
 **No platform-adapter interface.** There will be one implementation (ODC). An
 interface with a single implementation is indirection, not abstraction. Demo safety
