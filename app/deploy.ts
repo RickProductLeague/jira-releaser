@@ -5,11 +5,14 @@
 // components. The client sends only the release name and the revision it picked;
 // everything that decides *what* ships is re-derived here from Jira and ODC.
 import {
+  doneTransition,
   findVersion,
   getIssues,
   PROJECT,
   releaseApps,
+  releaseVersion,
   setVersionDescription,
+  transitionIssue,
   versionUrl,
 } from '@/lib/jira';
 import {
@@ -154,23 +157,75 @@ export async function launchDeploy(
 }
 
 /**
- * Write the approved customer changelog onto the Jira release. Deliberately its own
- * action, pressed after the deploy reports Finished — the changelog says "this is
- * live", so it shouldn't be written by anything that runs before the deploy does.
+ * Write the approved technical release notes onto the Jira release, into the
+ * description — the editable rich-text block on the release page — as Jira markup.
  * Does not mark the version released; that's a separate decision.
  */
-export async function writeChangelogToJira(
+export async function writeNotesToJira(
   v: string,
-  changelog: string
+  notes: string
 ): Promise<{ url?: string; error?: string }> {
   try {
-    if (!changelog.trim()) return { error: 'No changelog text to write.' };
+    if (!notes.trim()) return { error: 'No release notes to write.' };
     const version = await findVersion(PROJECT, v);
     if (!version) return { error: `No release named "${v}" in ${PROJECT}.` };
-    await setVersionDescription(version.id, changelog);
+    await setVersionDescription(version.id, notes);
     return { url: versionUrl(version.id) };
   } catch (e) {
     return { error: msg(e) };
+  }
+}
+
+/**
+ * Close out the release: flip the Jira fixVersion to released, dated today. Its own
+ * button on its own step, after the deploy — marking it released is a claim that the
+ * code shipped, so nothing here does it as a side effect of anything else.
+ */
+export async function markReleased(v: string): Promise<{ url?: string; error?: string }> {
+  try {
+    const version = await findVersion(PROJECT, v);
+    if (!version) return { error: `No release named "${v}" in ${PROJECT}.` };
+    if (version.released) return { url: versionUrl(version.id) };
+    await releaseVersion(version.id);
+    return { url: versionUrl(version.id) };
+  } catch (e) {
+    return { error: msg(e) };
+  }
+}
+
+export type IssueResult = { key: string; status: 'done' | 'moved' | 'blocked' | 'error'; detail?: string };
+
+/**
+ * Transition every issue in the release into a Done-category status. Like the deploy,
+ * the set is re-read from Jira rather than taken from the browser, and already-done
+ * issues are skipped instead of transitioned again.
+ * ponytail: no partial rollback. Jira transitions aren't a transaction, and a
+ * half-closed release is visible per row below — the human retries the failures.
+ */
+export async function markIssuesDone(
+  v: string
+): Promise<{ results: IssueResult[]; error?: string }> {
+  try {
+    const issues = await getIssues(PROJECT, v);
+    if (issues.length === 0) return { results: [], error: `No issues in "${v}".` };
+    const results = await Promise.all(
+      issues.map(async (i): Promise<IssueResult> => {
+        if (i.done) return { key: i.key, status: 'done', detail: i.status };
+        try {
+          const id = await doneTransition(i.key);
+          // A workflow with no route to Done from the current status is a config
+          // fact, not a failure — say which status it's stuck in.
+          if (!id) return { key: i.key, status: 'blocked', detail: i.status };
+          await transitionIssue(i.key, id);
+          return { key: i.key, status: 'moved' };
+        } catch (e) {
+          return { key: i.key, status: 'error', detail: msg(e) };
+        }
+      })
+    );
+    return { results };
+  } catch (e) {
+    return { results: [], error: msg(e) };
   }
 }
 

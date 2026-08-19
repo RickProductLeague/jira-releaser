@@ -41,7 +41,7 @@ dashboard to approve and dispatch notes.
 | 4 | ODC read-only: list stages/assets/revisions, resolve "next stage" | **Built and verified against live ODC** |
 | 5 | Pre-flight impact analysis as a deploy gate | **Built and verified against live ODC** |
 | 6 | Write notes to revision → POST deployment → poll status | **Built. Version + notes write verified live; the deploy POST itself is still unfired** |
-| 7 | Write changelog to the Jira fixVersion description, mark released | **Changelog write built and verified live.** Marking the version released: not built |
+| 7 | Write changelog to the Jira fixVersion description, mark released | **Changelog write built and verified live. Step 7 built: mark released + mark all issues Done — not yet fired against live Jira** |
 
 Ship 1–3 and make them look good. 4 and 6 are the differentiator. 5 and 7 are
 garnish.
@@ -473,6 +473,33 @@ link to `/projects/HAC/versions/15924`.
 skip logic, polling in mock — but no live `POST /deployment-operations` has been fired by
 this app. All three apps happen to be live at their picked revisions, which is why the
 write path could be tested at all without deploying.
+
+## Step 7 — close out in Jira — 2026-08-19
+
+Asked for by Rick: a wizard step after the deploy holding two buttons — mark the release
+released, and mark the work in it done.
+
+- **Step 7 = Close out** (`&done=1`). It reads no ODC data at all, so the shared step-4/5/6
+  ODC block is now bounded (`step >= 3 && step <= 5`) and step 7 renders its own section.
+  `closeUrl` preserves every param already on the URL, so "Back to the deploy" returns to
+  the same picks and order.
+- **Two buttons, not one.** `markReleased` PUTs `{released: true, releaseDate: today}` on
+  the fixVersion; `markIssuesDone` re-reads the release's issues from Jira and transitions
+  each one that isn't already Done. A combined button would hide which of the two writes
+  failed, which is the only useful information when one does.
+- **The Done target is the status *category*, never a status name** (`doneTransition`
+  filters `GET /issue/{key}/transitions` on `to.statusCategory.key === 'done'`) — same rule
+  as `Issue.done`, because this board's statuses are named things like "UAT PO Check". An
+  issue whose workflow offers no Done transition from where it is reports as *blocked* with
+  its current status, not as an error.
+- **Neither button checks that the deploy succeeded.** The step says so on screen. The link
+  into step 7 lives inside `DeployPanel` — the only component that knows the run landed —
+  and is the loud primary button only once every op is `Finished`/`AlreadyLive`, a dotted
+  "Skip to close-out" otherwise (a reloaded tab has no ops but the release may well be out).
+- **No test.** Both actions are a fetch and a status check; the only branch worth pinning
+  is the category filter, and CLAUDE.md rules out mocking `fetch` to prove it was called.
+  Typecheck plus the other three suites pass; the two writes are **unverified against live
+  Jira**.
 
 ## The flow, end to end — agreed 2026-08-19
 

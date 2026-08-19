@@ -24,7 +24,15 @@ import {
   type Revision,
   type Stage,
 } from '@/lib/odc';
-import { DeployPanel, JiraChangelog, Reorder, RefreshChecks } from './deploy-panel';
+import {
+  CloseOut,
+  ConfirmSubmit,
+  DeployPanel,
+  JiraReleaseNotes,
+  RefreshChecks,
+  RefreshJira,
+  Reorder,
+} from './deploy-panel';
 import { NotesPanel } from './notes-panel';
 
 export const dynamic = 'force-dynamic';
@@ -39,6 +47,7 @@ const STEPS = [
   'Confirm revisions',
   'Pre-flight',
   'Deploy',
+  'Close out',
 ] as const;
 
 function Stepper({ current }: { current: number }) {
@@ -79,8 +88,8 @@ export default async function Home({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const sp = await searchParams;
-  const { v, notes, deploy, check, go } = sp;
-  const step = !v ? 0 : !notes ? 1 : !deploy ? 2 : !check ? 3 : !go ? 4 : 5;
+  const { v, notes, deploy, check, go, done } = sp;
+  const step = !v ? 0 : !notes ? 1 : !deploy ? 2 : !check ? 3 : !go ? 4 : !done ? 5 : 6;
 
   let versions: Awaited<ReturnType<typeof getVersions>> = [];
   let issues: Awaited<ReturnType<typeof getIssues>> = [];
@@ -124,6 +133,12 @@ export default async function Home({
     .filter(([k]) => k.startsWith('rev.'))
     .map(([k, val]) => `&${k}=${val}`)
     .join('')}`;
+
+  // Step 7 keeps everything already on the URL, so "back" from it lands on the
+  // same deploy step with the same picks and order.
+  const closeUrl = `/?${new URLSearchParams(
+    Object.entries(sp).filter((e): e is [string, string] => e[1] !== undefined)
+  )}&done=1`;
 
   // Steps 4-5 — the ODC side. One row per app version in the deploy set: which
   // asset it resolves to, which revisions exist, and which one will ship.
@@ -210,9 +225,16 @@ export default async function Home({
   const toDeploy = rows
     .filter((r) => r.asset && deployable(r.asset))
     .sort((a, b) => rank(a.asset?.assetKey) - rank(b.asset?.assetKey));
-  const blocked =
-    unresolved.length > 0 ||
-    flights.some((f) => f.status !== 'ok' && f.status !== 'warnings');
+  // Only ODC's own analysis blocks. An app name that matches no asset makes the
+  // release *incomplete*, not unsafe — the deploy set just doesn't include it — so
+  // it's a confirm, not a gate. The deploy action re-derives the set either way.
+  const blocked = flights.some((f) => f.status !== 'ok' && f.status !== 'warnings');
+  const incomplete =
+    unresolved.length > 0
+      ? `${unresolved.length} app version${unresolved.length === 1 ? '' : 's'} in the Jira comment (${unresolved
+          .map((r) => r.app)
+          .join(', ')}) match no ODC asset and will NOT be deployed. Approve anyway?`
+      : undefined;
   const nameOf = (key?: string) => (key ? (assetNames.get(key) ?? key) : key);
   const alreadyLive = flights.filter((f) => f.alreadyLive);
   const willDeploy = flights.filter((f) => !f.alreadyLive);
@@ -287,6 +309,7 @@ export default async function Home({
             <a href="/" className="text-sm underline decoration-dotted opacity-70">
               Change release
             </a>
+            <RefreshJira />
           </div>
 
           {issues.length > 0 && (
@@ -450,9 +473,9 @@ export default async function Home({
 
           {generated && (
             <>
-              {/* Write the changelog to Jira from here, where the text is on screen
+              {/* Write the notes to Jira from here, where the text is on screen
                   and editable. It writes what's in the panels below, edits included. */}
-              <JiraChangelog v={v!} jiraUrl={jiraUrl} changelog={generated.business} />
+              <JiraReleaseNotes v={v!} jiraUrl={jiraUrl} notes={generated.technical} />
 
               <div className="mt-6 grid items-start gap-4 md:grid-cols-2">
                 {(
@@ -499,8 +522,9 @@ export default async function Home({
         </section>
       )}
 
-      {/* Steps 4, 5 and 6 all work off the same ODC reads. */}
-      {step >= 3 && !error && (
+      {/* Steps 4, 5 and 6 all work off the same ODC reads. Step 7 needs none of
+          them — it only writes back to Jira. */}
+      {step >= 3 && step <= 5 && !error && (
         <section className="mt-8">
           <div className="flex flex-wrap items-baseline gap-3">
             <h2 className="text-lg font-medium">
@@ -763,20 +787,18 @@ export default async function Home({
                     value={f.revision}
                   />
                 ))}
-                <button
-                  type="submit"
-                  disabled={blocked}
-                  className="rounded bg-foreground px-4 py-2 text-sm text-background disabled:opacity-40"
-                >
+                <ConfirmSubmit disabled={blocked} warning={incomplete}>
                   Approve — deploy {willDeploy.length} app
                   {willDeploy.length === 1 ? '' : 's'} to {target?.name ?? 'the next stage'}
-                </button>
+                </ConfirmSubmit>
                 <span className="text-sm opacity-60">
                   {blocked
                     ? 'Blocked: fix the errors above first.'
-                    : alreadyLive.length > 0
-                      ? `${alreadyLive.length} already live and will be skipped.`
-                      : 'Nothing is deployed until you press the button on the next step.'}
+                    : incomplete
+                      ? `${unresolved.length} unmatched app version${unresolved.length === 1 ? '' : 's'} will be left out — you'll be asked to confirm.`
+                      : alreadyLive.length > 0
+                        ? `${alreadyLive.length} already live and will be skipped.`
+                        : 'Nothing is deployed until you press the button on the next step.'}
                 </span>
               </form>
             </RefreshChecks>
@@ -822,9 +844,31 @@ export default async function Home({
                 )}
                 blocked={false}
                 parallel={sp.parallel === '1'}
+                closeUrl={closeUrl}
               />
             </>
           )}
+        </section>
+      )}
+
+      {/* Step 7 — the release is out; tell Jira. */}
+      {step === 6 && !error && (
+        <section className="mt-8">
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h2 className="text-lg font-medium">Close out {v}</h2>
+            <a
+              href={closeUrl.replace('&done=1', '')}
+              className="text-sm underline decoration-dotted opacity-70"
+            >
+              Back to the deploy
+            </a>
+            <RefreshJira />
+          </div>
+          <p className="mt-2 text-sm opacity-60">
+            Nothing here checks that the deploy succeeded — marking a release released
+            is a claim only you can make. Both writes go straight to Jira.
+          </p>
+          <CloseOut v={v!} jiraUrl={jiraUrl} issues={issues.length} notDone={notDone} />
         </section>
       )}
     </main>

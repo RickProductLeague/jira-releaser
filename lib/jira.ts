@@ -19,6 +19,21 @@ async function jira(path: string) {
   return res.json();
 }
 
+/** The write half of `jira()`. Same auth, same error shape, no response body — every
+ *  write this app does returns either nothing useful or the object it just sent. */
+async function jiraSend(path: string, method: 'PUT' | 'POST', body: unknown): Promise<void> {
+  const res = await fetch(`${BASE}/rest/api/2${path}`, {
+    method,
+    headers: { Authorization: auth(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  if (!res.ok)
+    throw new Error(
+      `Jira ${res.status} on ${method} ${path}: ${(await res.text()).slice(0, 300)}`
+    );
+}
+
 // ponytail: the one board this build targets. Lives here, not in the page, so the
 // deploy action can re-derive the release set without importing a page module.
 export const PROJECT = 'HAC';
@@ -119,14 +134,35 @@ export function toPlainText(md: string): string {
  * surfaces as the error it is rather than being silently truncated.
  */
 export async function setVersionDescription(id: string, description: string): Promise<void> {
-  const res = await fetch(`${BASE}/rest/api/2/version/${id}`, {
-    method: 'PUT',
-    headers: { Authorization: auth(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description: toPlainText(description) }),
-    cache: 'no-store',
+  await jiraSend(`/version/${id}`, 'PUT', { description: toPlainText(description) });
+}
+
+/**
+ * Mark the release itself shipped. `releaseDate` is required alongside `released`
+ * or Jira shows a release with no date; today is the only sensible default, since
+ * this runs right after the deploy landed.
+ */
+export async function releaseVersion(id: string): Promise<void> {
+  await jiraSend(`/version/${id}`, 'PUT', {
+    released: true,
+    releaseDate: new Date().toISOString().slice(0, 10),
   });
-  if (!res.ok)
-    throw new Error(`Jira ${res.status} writing version ${id}: ${(await res.text()).slice(0, 300)}`);
+}
+
+/**
+ * The id of this issue's transition into a Done-category status, or undefined when
+ * the workflow offers none from where the issue is now. Category, never the status
+ * name — same rule as `Issue.done`; "UAT PO Check" is a real status name here.
+ * ponytail: first Done transition wins. A workflow with two ("Done" / "Won't Do")
+ * would need the human to choose; this board has one.
+ */
+export async function doneTransition(key: string): Promise<string | undefined> {
+  const { transitions } = await jira(`/issue/${key}/transitions`);
+  return (transitions ?? []).find((t: any) => t.to?.statusCategory?.key === 'done')?.id;
+}
+
+export async function transitionIssue(key: string, transition: string): Promise<void> {
+  await jiraSend(`/issue/${key}/transitions`, 'POST', { transition: { id: transition } });
 }
 
 /**

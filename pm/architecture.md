@@ -5,61 +5,49 @@ today, not the finished plan. For what's coming, see [milestones.md](./milestone
 
 ## The whole system at a glance
 
-Solid boxes and arrows exist in the repo today. Dashed ones do not. The three
-external systems are all reachable and verified — it's the wiring between them and
-the dashboard that isn't built.
+Every box and arrow below exists in the repo today. Dotted arrows are reads, thick
+arrows are writes — the whole app is seven reads and four writes across three
+external systems.
 
 ```mermaid
 flowchart TB
-    Jira[("Jira Cloud<br/>project HAC<br/>fixVersion = one release")]
-    OdcApi[("OutSystems ODC public REST APIs<br/>productleague tenant<br/>OAuth2 client credentials")]
-    Agent{{"Release Notes Agent<br/>ODC app on personal-nrwxjjed-dev<br/>POST /rest/ReleaseNotes/V1/ReleaseNotes"}}
-
-    subgraph server["Next.js on the server"]
-        direction TB
-        Client["<b>lib/jira.ts</b><br/>REST v2 client<br/>versions, issues, paging"]
-        Parse["<b>app-version parser</b><br/>reads ODC apps out of<br/>ticket comments"]
-        Odc["<b>lib/odc.ts</b><br/>stages, listApps<br/>token cache, ODC_MOCK"]
-        Dash["<b>app/page.tsx</b><br/>dashboard: issue table,<br/>deploy set, warnings"]
-        Client --> Parse --> Dash
-        Odc --> Dash
+    subgraph wizard["<b>app/page.tsx</b> — one server component. The step is derived from the URL, never stored."]
+        direction LR
+        S1["<b>1 · Pick<br/>release</b>"]
+        S2["<b>2 · Review<br/>Jira work</b>"]
+        S3["<b>3 · Release<br/>notes</b>"]
+        S4["<b>4 · Confirm<br/>revisions</b>"]
+        S5["<b>5 · Pre-<br/>flight</b>"]
+        S6["<b>6 · Deploy</b>"]
+        S7["<b>7 · Close<br/>out</b>"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
     end
 
-    Review["review, edit, approve<br/>technical + customer notes<br/>side by side"]
-    WriteNotes["write technical notes to<br/>each asset revision"]
-    Changelog["write customer changelog to<br/>the Jira fixVersion description"]
-    Deploy["deploy each asset Dev to Prod<br/>Release build only, poll to Finished"]
-    MarkReleased["mark the Jira fixVersion<br/>as released"]
+    Jira[("<b>Jira Cloud</b><br/>project HAC · REST v2, API token")]
+    Agent{{"<b>Release Notes Agent</b><br/>ODC app on personal-nrwxjjed-dev"}}
+    Odc[("<b>OutSystems ODC</b><br/>productleague tenant · OAuth2")]
 
-    Jira ==> Client
-    OdcApi ==> Odc
+    Jira -. "versions" .-> S1
+    Jira -. "issues" .-> S2
+    S3 == "changelog" ==> Jira
+    S7 == "closed" ==> Jira
 
-    Dash -. "issues + apps" .-> Agent
-    Agent -. "technical + friendly notes" .-> Review
-    Review -. "approve" .-> WriteNotes
-    Review -. "approve" .-> Changelog
-    WriteNotes -.-> Deploy
-    Changelog -. "PUT /version/id" .-> Jira
-    Deploy -.-> OdcApi
-    Deploy -. "on success" .-> MarkReleased
-    MarkReleased -. "released = true" .-> Jira
+    S3 -. "tickets" .-> Agent
+    Agent -. "notes" .-> S3
 
-    Browser(["Browser<br/>plain GET form, no client JS"])
-    Dash ==> Browser
+    Odc -. "apps ·<br/>revisions" .-> S4
+    Odc -. "impact" .-> S5
+    S6 == "tag · notes ·<br/>deploy" ==> Odc
 
-    classDef built fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
-    classDef todo fill:#f1f5f9,stroke:#94a3b8,stroke-width:1px,stroke-dasharray:5 4,color:#475569
+    classDef step fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#334155
     classDef ext fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#1e1b4b
-
-    style server fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#334155
-
-    class Client,Parse,Odc,Dash,Browser built
-    class Review,WriteNotes,Changelog,Deploy,MarkReleased todo
-    class Jira,OdcApi,Agent ext
+    class S1,S2,S3,S4,S5,S6,S7 step
+    class Jira,Odc,Agent ext
+    style wizard fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#334155
 ```
 
-The built portion is milestones 1 and 4. Everything dashed is 2, 3, 6 and 7, tracked
-in [milestones.md](./milestones.md).
+Milestones 1–7 are all in there; [milestones.md](./milestones.md) says which parts have
+been fired against the live systems and which have only been typechecked.
 
 Note that **note generation is not in this repo**. It's an OutSystems agent app on a
 different ODC tenant, exposed as one unauthenticated REST endpoint; the dashboard
@@ -68,11 +56,18 @@ POSTs tickets to it and renders what comes back. Its contract lives at
 That satisfies the brief's "agent to communicate with Jira" without an Anthropic key
 in this codebase.
 
-Approval fans out to four writes, not one: technical notes onto each ODC asset
-revision, the customer changelog onto the Jira fixVersion description, the deploy
-itself, and — only once the deploy reports `Finished` — marking the fixVersion
-released in Jira. Marking released before a successful deploy would claim a release
-that didn't happen.
+The four writes are deliberately four separate human decisions, not one Approve:
+
+| Step | Write | Goes to |
+|------|-------|---------|
+| 3 | customer changelog → the release description | Jira |
+| 6 | `tag` + `releaseNotes` on each revision, then the Deploy | ODC |
+| 7 | `released: true`, dated today | Jira |
+| 7 | each issue transitioned into its Done status | Jira |
+
+Step 7 is last because marking a fixVersion released claims the code shipped. Nothing
+in the app verifies that claim — the link into step 7 is only the primary button once
+every deploy op came back `Finished` or `AlreadyLive`, and the step says so on screen.
 
 Note also that the two ODC arrows point at the *same* tenant for reads and deploys
 (`productleague`), but the agent lives on a *different* one (`personal-nrwxjjed-dev`),
@@ -86,8 +81,8 @@ human review and approve them, then writes the technical notes onto each ODC ass
 revision, the customer changelog onto the Jira fixVersion, and deploys the assets to
 the next OutSystems ODC stage.
 
-Built: the Jira read, the app parsing, and the ODC reads. Not built: everything from
-"sends them to an agent" onward.
+Then it closes the release out: the fixVersion marked released and every issue in it
+transitioned to Done. All seven steps exist; see the diagram above.
 
 ## Stack
 
@@ -107,11 +102,17 @@ framework. Everything below is plain TypeScript and React Server Components.
 ```
 app/
   layout.tsx        Root layout, fonts, metadata (from create-next-app)
-  page.tsx          The entire dashboard — one server component
+  page.tsx          The whole wizard — one server component, seven steps
+  deploy.ts         Every mutation: deploy, poll, notes-to-Jira, close-out
+  deploy-panel.tsx  The client components — deploy polling, reorder, close-out
+  notes-panel.tsx   Editable note pane (sessionStorage, per tab)
+  markdown.tsx      Tiny markdown renderer for the note panes
   globals.css       Tailwind import + light/dark colour tokens
 lib/
-  jira.ts           Jira client + the ODC app-version parser
-  jira.test.ts      Assertion script for the two bits of real logic
+  jira.ts           Jira client, the ODC app-version parser, the Jira writes
+  odc.ts            ODC client: token cache, stages, assets, deploys, pre-flight
+  notes.ts          Calls the notes agent and splits its two sections
+  *.test.ts         Assertion scripts for the bits of real logic
 pm/
   milestones.md     Scope, status, decisions, open questions
   architecture.md   This file
@@ -119,7 +120,7 @@ pm/
 .env.example        Which env vars are needed
 ```
 
-That is the whole application. Four source files.
+That is the whole application. No API routes, no store, no adapters.
 
 ## How a request flows
 
@@ -146,8 +147,10 @@ sequenceDiagram
 Worth noticing what is *not* in that diagram: no API route, no client-side fetch, no
 loading state, no JSON endpoint. The page is a server component that awaits its own
 data and returns HTML. Selecting a release is a plain `<form>` doing a GET with
-`?v=<version>`; Next re-renders the page on the server. Zero client-side JavaScript
-runs for the current feature set.
+`?v=<version>`; Next re-renders the page on the server. Client JavaScript exists only
+where a step genuinely needs it — poll a running deploy, drag rows into a deploy order,
+edit a note, press one of the two close-out buttons — and each of those is a small
+component in `deploy-panel.tsx` calling a server action.
 
 `export const dynamic = 'force-dynamic'` keeps Next from trying to prerender a page
 whose whole purpose is live data.
